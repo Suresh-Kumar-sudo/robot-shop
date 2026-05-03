@@ -1,0 +1,12 @@
+# Node modules (never copy from host)
+node_modules
+npm-debug.log
+
+# Build output (if you build inside container)
+dist
+build
+
+# Test files
+coverage
+*.test.js
+*.spec.js

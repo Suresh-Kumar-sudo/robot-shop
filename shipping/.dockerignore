@@ -1,0 +1,9 @@
+# Compiled classes
+*.class
+
+# Logs
+*.log
+
+# Maven / Gradle cache (local)
+.mvn/
+.gradle/

@@ -1,0 +1,19 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.out
+
+# Build output
+bin/
+build/
+dist/
+
+# Go build cache (local)
+pkg/
+*.test
+
+# Vendor (only ignore if you DON'T use vendoring)
+vendor/

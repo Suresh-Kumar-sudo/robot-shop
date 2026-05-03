@@ -1,0 +1,9 @@
+          mongodb        redis        rabbitmq        mysql
+             ↓             ↓             ↓             ↓
+        catalogue       cart        payment       shipping
+             ↓            ↓            ↓             ↓
+             ↓          user        dispatch       ratings
+                    (also uses mongodb)
+                         ↓
+                     web (NGINX)
+

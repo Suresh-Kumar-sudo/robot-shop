@@ -1,0 +1,17 @@
+# Composer dependencies (install inside container)
+vendor/
+
+# Logs
+*.log
+logs/
+
+# Cache / temp (Symfony/Laravel/etc.)
+var/cache/
+var/log/
+var/sessions/
+tmp/
+temp/
+
+# Build / artifacts
+build/
+dist/
