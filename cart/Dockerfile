@@ -5,7 +5,7 @@ WORKDIR /opt/server
 RUN addgroup -S app && \
     adduser -S app -G app
 
-COPY package*.json .
+COPY package*.json ./
 
 RUN npm ci --only=production
 
