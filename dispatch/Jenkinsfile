@@ -1,0 +1,346 @@
+pipeline {
+
+    agent none
+
+    environment {
+
+        GIT_REPO = 'https://github.com/Suresh-Kumar-sudo/robot-shop.git'
+
+        IMAGE_NAME = 'sureshkumarnadar1/rs-dispatch'
+
+        APP_VERSION = 'v1.2.0'
+    }
+
+    stages {
+
+        stage('Checkout') {
+
+            agent any
+
+            steps {
+
+                cleanWs()
+
+                git url: "${GIT_REPO}",
+                    branch: 'main'
+
+                script {
+
+                    def SHORT_SHA = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_TAG = "${APP_VERSION}-${SHORT_SHA}"
+
+                    echo "IMAGE TAG: ${env.IMAGE_TAG}"
+                }
+            }
+        }
+
+        stage('Secrets Scan') {
+
+            agent {
+                docker {
+                    image 'zricethezav/gitleaks:latest'
+                    reuseNode true
+
+                    args '''
+                        --entrypoint="" \
+                        -u root
+                    '''
+                }
+            }
+
+            steps {
+
+                sh '''
+                    set -ex
+
+                    mkdir -p reports/gitleaks
+
+                    gitleaks detect \
+                    --source . \
+                    --report-format json \
+                    --report-path reports/gitleaks/gitleaks-report.json
+                '''
+            }
+
+            post {
+
+                always {
+
+                    archiveArtifacts artifacts: 'reports/gitleaks/*',
+                    fingerprint: true
+                }
+            }
+        }
+
+        stage('Docker Build') {
+
+            agent any
+
+            steps {
+
+                sh '''
+                    set -ex
+
+                    cd dispatch
+
+                    docker build \
+                    -t $IMAGE_NAME:$IMAGE_TAG .
+                '''
+            }
+        }
+
+        stage('Trivy Scan') {
+
+            agent {
+                docker {
+                    image 'aquasec/trivy:latest'
+                    reuseNode true
+
+                    args '''
+                        --entrypoint="" \
+                        --network CI-network \
+                        -u root \
+                        -v /var/run/docker.sock:/var/run/docker.sock
+                    '''
+                }
+            }
+
+            steps {
+
+                sh '''
+                    set -ex
+
+                    mkdir -p reports/trivy
+
+                    cd dispatch
+
+                    # OS package vulnerability report
+                    trivy image \
+                    --server http://trivy-server:4954 \
+                    --severity HIGH,CRITICAL \
+                    --pkg-types os \
+                    --scanners vuln \
+                    --exit-code 0 \
+                    --format template \
+                    --template "@../security/html.tpl" \
+                    -o ../reports/trivy/os-vulnerability-report.html \
+                    $IMAGE_NAME:$IMAGE_TAG
+
+                    # Application dependency vulnerability report
+                    trivy image \
+                    --server http://trivy-server:4954 \
+                    --severity HIGH,CRITICAL \
+                    --pkg-types library \
+                    --scanners vuln \
+                    --exit-code 0 \
+                    --format template \
+                    --template "@../security/html.tpl" \
+                    -o ../reports/trivy/library-vulnerability-report.html \
+                    $IMAGE_NAME:$IMAGE_TAG
+
+                    # SPDX SBOM
+                    trivy image \
+                    --server http://trivy-server:4954 \
+                    --scanners vuln \
+                    --exit-code 0 \
+                    --format spdx-json \
+                    --output ../reports/trivy/spdx.json \
+                    $IMAGE_NAME:$IMAGE_TAG
+
+                    # CycloneDX SBOM
+                    trivy image \
+                    --server http://trivy-server:4954 \
+                    --scanners vuln \
+                    --exit-code 0 \
+                    --format cyclonedx \
+                    --output ../reports/trivy/cyclonedx.json \
+                    $IMAGE_NAME:$IMAGE_TAG
+
+                    # Final security gate
+                    trivy image \
+                    --server http://trivy-server:4954 \
+                    --severity CRITICAL \
+                    --pkg-types os,library \
+                    --scanners vuln \
+                    --exit-code 0 \
+                    $IMAGE_NAME:$IMAGE_TAG
+                '''
+            }
+
+            post {
+
+                always {
+
+                    archiveArtifacts artifacts: 'reports/trivy/*',
+                    fingerprint: true
+                }
+            }
+        }
+
+        stage('SAST Scan') {
+
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli:latest'
+                    reuseNode true
+
+                    args '''
+                        --network CI-network \
+                        -u root
+                    '''
+                }
+            }
+
+            steps {
+
+                withSonarQubeEnv('sonarqube') {
+
+                    sh '''
+                        set -ex
+
+                        cd dispatch
+
+                        sonar-scanner \
+                        -Dsonar.projectKey=robot-shop-dispatch \
+                        -Dsonar.projectName=robot-shop-dispatch \
+                        -Dsonar.sources=.
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+
+            steps {
+
+                timeout(time: 5, unit: 'MINUTES') {
+
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+
+            agent {
+                docker {
+                    image 'owasp/dependency-check:latest'
+                    reuseNode true
+
+                    args '''
+                        --entrypoint="" \
+                        -u root \
+                        -v dependency-check-data:/usr/share/dependency-check/data
+                    '''
+                }
+            }
+
+            steps {
+
+                sh '''
+                    set -ex
+
+                    mkdir -p reports/dependency-check
+
+                    /usr/share/dependency-check/bin/dependency-check.sh \
+                    --noupdate \
+                    --project "robot-shop-dispatch" \
+                    --scan dispatch \
+                    --format HTML \
+                    --format JSON \
+                    --out reports/dependency-check
+                '''
+            }
+
+            post {
+
+                always {
+
+                    archiveArtifacts artifacts: 'reports/dependency-check/*',
+                    fingerprint: true
+                }
+            }
+        }
+        
+        stage('Docker Push') {
+
+            agent any
+
+            steps {
+
+                withCredentials([usernamePassword(
+                    credentialsId: 'DOCKERHUB_TOKEN',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+
+                    sh '''
+                        set -ex
+
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+
+                        docker push $IMAGE_NAME:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('Update Helm Repo') {
+
+            agent any
+
+            steps {
+
+                withCredentials([usernamePassword(
+                    credentialsId: 'GITHUB_TOKEN',
+                    usernameVariable: 'GIT_USER',
+                    passwordVariable: 'GIT_PASS'
+                )]) {
+
+                    sh '''
+                        set -ex
+
+                        curl -L https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o yq
+
+                        chmod +x yq
+
+                        rm -rf robot-shop-helm
+
+                        git clone https://$GIT_USER:$GIT_PASS@github.com/Suresh-Kumar-sudo/robot-shop-helm.git
+
+                        cd robot-shop-helm/robot-shop-eks
+
+                        export IMAGE_TAG=$IMAGE_TAG
+
+                        ../../yq -i '.dispatch.image.tag = strenv(IMAGE_TAG)' values.yaml
+
+                        git config user.email "jenkins@local"
+                        git config user.name "jenkins"
+
+                        git add values.yaml
+
+                        git diff --cached --quiet || git commit -m "Update dispatch image tag to $IMAGE_TAG"
+
+                        git push origin main
+                    '''
+                }
+            }
+}
+    }
+
+    post {
+
+        success {
+            echo "Pipeline completed successfully"
+        }
+
+        failure {
+            echo "Pipeline failed"
+        }
+    }
+}
+

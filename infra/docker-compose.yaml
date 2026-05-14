@@ -1,0 +1,55 @@
+version: '3'
+
+networks:
+  CI-network:
+
+volumes:
+  jenkins_home:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:
+  dependency-check-data:
+
+services:
+
+  jenkins:
+    build: .
+    container_name: jenkins
+
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+
+    networks:
+      - CI-network
+
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+
+    ports:
+      - "9000:9000"
+
+    networks:
+      - CI-network
+
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+
+  trivy-server:
+    image: aquasec/trivy:latest
+    container_name: trivy-server
+
+    command: server
+
+    ports:
+      - "4954:4954"
+
+    networks:
+      - CI-network
