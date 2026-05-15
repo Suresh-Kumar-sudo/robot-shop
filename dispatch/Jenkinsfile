@@ -76,6 +76,92 @@ pipeline {
             }
         }
 
+        stage('SAST Scan') {
+
+            agent {
+                docker {
+                    image 'sonarsource/sonar-scanner-cli:latest'
+                    reuseNode true
+
+                    args '''
+                        --network CI-network \
+                        -u root
+                    '''
+                }
+            }
+
+            steps {
+
+                withSonarQubeEnv('sonarqube') {
+
+                    sh '''
+                        set -ex
+
+                        cd dispatch
+
+                        sonar-scanner \
+                        -Dsonar.projectKey=robot-shop-dispatch \
+                        -Dsonar.projectName=robot-shop-dispatch \
+                        -Dsonar.sources=.
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+
+            steps {
+
+                timeout(time: 5, unit: 'MINUTES') {
+
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('OWASP Dependency Check') {
+
+            agent {
+                docker {
+                    image 'owasp/dependency-check:latest'
+                    reuseNode true
+
+                    args '''
+                        --entrypoint="" \
+                        -u root \
+                        -v dependency-check-data:/usr/share/dependency-check/data
+                    '''
+                }
+            }
+
+            steps {
+
+                sh '''
+                    set -ex
+
+                    mkdir -p reports/dependency-check
+
+                    /usr/share/dependency-check/bin/dependency-check.sh \
+                    --noupdate \
+                    --project "robot-shop-dispatch" \
+                    --scan dispatch \
+                    --format HTML \
+                    --format JSON \
+                    --out reports/dependency-check
+                '''
+            }
+
+            post {
+
+                always {
+
+                    archiveArtifacts artifacts: 'reports/dependency-check/*',
+                    fingerprint: true
+                }
+            }
+        }
+
+
         stage('Docker Build') {
 
             agent any
@@ -181,90 +267,6 @@ pipeline {
             }
         }
 
-        stage('SAST Scan') {
-
-            agent {
-                docker {
-                    image 'sonarsource/sonar-scanner-cli:latest'
-                    reuseNode true
-
-                    args '''
-                        --network CI-network \
-                        -u root
-                    '''
-                }
-            }
-
-            steps {
-
-                withSonarQubeEnv('sonarqube') {
-
-                    sh '''
-                        set -ex
-
-                        cd dispatch
-
-                        sonar-scanner \
-                        -Dsonar.projectKey=robot-shop-dispatch \
-                        -Dsonar.projectName=robot-shop-dispatch \
-                        -Dsonar.sources=.
-                    '''
-                }
-            }
-        }
-
-        stage('Quality Gate') {
-
-            steps {
-
-                timeout(time: 5, unit: 'MINUTES') {
-
-                    waitForQualityGate abortPipeline: true
-                }
-            }
-        }
-
-        stage('OWASP Dependency Check') {
-
-            agent {
-                docker {
-                    image 'owasp/dependency-check:latest'
-                    reuseNode true
-
-                    args '''
-                        --entrypoint="" \
-                        -u root \
-                        -v dependency-check-data:/usr/share/dependency-check/data
-                    '''
-                }
-            }
-
-            steps {
-
-                sh '''
-                    set -ex
-
-                    mkdir -p reports/dependency-check
-
-                    /usr/share/dependency-check/bin/dependency-check.sh \
-                    --noupdate \
-                    --project "robot-shop-dispatch" \
-                    --scan dispatch \
-                    --format HTML \
-                    --format JSON \
-                    --out reports/dependency-check
-                '''
-            }
-
-            post {
-
-                always {
-
-                    archiveArtifacts artifacts: 'reports/dependency-check/*',
-                    fingerprint: true
-                }
-            }
-        }
         
         stage('Docker Push') {
 
